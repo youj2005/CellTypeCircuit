@@ -5,8 +5,8 @@ import os
 from help_funcs import *
 import sys
 
-def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
-    print("SIMULATING:", condition)
+def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=False):
+    sim_name = f'{rngseed}'
 
     nest.ResetKernel()
     nonlin_name = "iaf_cond_exp_dend_nestml"
@@ -98,7 +98,7 @@ def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
     n_sst         = int(n_inh/2)
     n_pv         = int(n_inh/2)
     size          = float(1.)           # Size of the network
-    simtime       = float(800)          # ms Simulation time for each trial
+    simtime       = float(1500)          # ms Simulation time for each trial
     se_lat        = 0.1                 # Spread of the lateral excitatory connections
     si_lat        = 0.1                 # Spread of the lateral inhibitory connections
     st_lat        = 0.2                 # Spread of the thalamic excitatory connections
@@ -163,7 +163,6 @@ def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
     n2s_conni = {'rule': 'fixed_indegree', 'indegree': Nth}
     n2s_syni = {'synapse_model':'static_synapse', 'weight': -par_ext_syn_4*1.5e-3, 'delay': 0.1}
     n2s_i_synapses = nest.Connect(addnoise, sst_neurons, n2s_conni, syn_spec=n2s_syni)
-    
     
     ### Connectivity Parameters
     ## Connectivity from Campagnola, et al. 2022
@@ -247,116 +246,76 @@ def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
     s2e_conn = {'rule': 'pairwise_bernoulli', 'p': s2e_mask}
     s2e_syn = {'synapse_model':'static_synapse','receptor_type': 3, 'weight': g_syn_se, 'delay': 0.1 + nest.spatial.distance/velocity}
     nest.Connect(sst_neurons, exc_neurons, s2e_conn, syn_spec = s2e_syn)
-    
+
+    p_in_se = N_se_close/(ratio_in * n_sst)
+    p_out_se =  N_se_far/(ratio_out * n_sst)
+    s2e_mask = nest.logic.conditional(nest.spatial.distance <= se_lat, p_in_se,p_out_se)
+    s2e_conn = {'rule': 'pairwise_bernoulli', 'p': s2e_mask}
+    s2e_syn = {'synapse_model':'static_synapse','receptor_type': 3, 'weight': g_syn_se, 'delay': 0.1 + nest.spatial.distance/velocity}
+    nest.Connect(sst_neurons, exc_neurons, s2e_conn, syn_spec = s2e_syn)
+
     p_in_sp = N_sp_close/(ratio_in * n_sst)
     p_out_sp =  N_sp_far/(ratio_out * n_sst)
     s2p_mask = nest.logic.conditional(nest.spatial.distance <= se_lat, p_in_sp,p_out_sp)
     s2p_conn = {'rule': 'pairwise_bernoulli', 'p': s2p_mask}
     s2p_syn = {'synapse_model':'static_synapse', 'weight': -g_syn_sp, 'delay': 0.1 + nest.spatial.distance/velocity}
+        
     nest.Connect(sst_neurons, pv_neurons, s2p_conn, syn_spec = s2p_syn)
-    
-    #### Stimulation 
-    stim_type, contrast = condition
-    if stim_type == 'Spont':
-        print("Spontaneous Sim")
-        sim_name = 'Spont'
-        sim_spontaneous = True
-    elif stim_type in ['PV', 'SST']:
-        print(stim_type, 'stimulation at contrast', contrast)
-        sim_name = f'{stim_type}_{contrast}'
-        sim_spontaneous = False
-    else:
-        raise Exception()
     
     ### Reset time and variables
     reset_sim()
     
-    ### Visual and Chr2 stimulation ###
-    if not sim_spontaneous:
-        #gext_rate     = par_gext_rate0 + par_gext_rate1*contrast  #contrast varies between 0.02 and 1
-        gext_rate     = par_gext_rate0 + par_gext_rate1*np.tanh(contrast/vis_sat)  #contrast varies between 0.02 and 1
-        intensities   = gext_rate*np.ones(nb_repeats)
-        Chr2_times = np.array([sim_delay + simtime*(1.+2.*i) for i in range(nb_repeats)]) # Induce an instantaneous synaptic conductance in the target population at time 0 every other trial
-        Chr2_proba = 1.    # percentage of cells that will receive the conductance change
+    th_pos = nest.spatial.free(pos=nest.random.uniform(min=0., max=1.),
+                                extent=[1.,1.], edge_wrap=True)
+    thalamus = nest.Create('inhomogeneous_poisson_generator', n_thalamus, positions=th_pos)
     
-        th_pos = nest.spatial.free(pos=nest.random.uniform(min=0., max=1.),
-                                   extent=[1.,1.], edge_wrap=True)
-        thalamus = nest.Create('inhomogeneous_poisson_generator', n_thalamus, positions=th_pos)
-        
-        #times     = np.arange(0, 200, 1.)
-        times     = np.arange(0, 400, 1.)
-        times [0] = 0.1
-        for ni in range(n_thalamus):
-            x, y = nest.GetPosition(thalamus[ni])
-            rate_times = []
-            rate_values = []
+    #times     = np.arange(0, 200, 1.)
+    times     = np.arange(0, 400, 1.)
+    times [0] = 0.1
     
-            for repeat in range(nb_repeats):
-                #padding = repeat * (simtime+time_spacing)
-                padding = repeat * (simtime+time_spacing) + sim_delay
-                rates = gext_rate * np.exp(-((times-m_time)**2/(2*s_time**2)+(x-m_xy[0])**2/(2*s_xy[0]**2)+(y-m_xy[1])**2/(2*s_xy[1]**2)))
-    
-                rate_times += list(times+ padding)
-                rate_values += list(rates)
-    
-            #print('GAUSSIAN', ni)
-            #print(rate_times)
-            #print(rate_values)
-    
-            nest.SetStatus(thalamus[ni], {'rate_times':rate_times, 'rate_values':rate_values})
-    
-        t2e_conn = {'rule': 'fixed_indegree', 'indegree': Nth, 'mask': {'circular': {'radius': st_lat}}}
-        t2e_syn = {'synapse_model':'static_synapse','receptor_type': 1, 'weight': g_tha_e, 'delay': 0.1}
-        nest.Connect(thalamus, exc_neurons,t2e_conn, syn_spec=t2e_syn)
-    
-        t2p_conn = {'rule': 'fixed_indegree', 'indegree': Nth, 'mask': {'circular': {'radius': st_lat}}}
-        t2p_syn = {'synapse_model':'static_synapse', 'weight': g_tha_p, 'delay': 0.1}
-        nest.Connect(thalamus, pv_neurons,t2p_conn, syn_spec=t2p_syn)
+    sampled_img = []
+    for ni in range(n_thalamus):
+        x, y = nest.GetPosition(thalamus[ni])
+        rate_times = []
+        rate_values = []
 
-        #print('THALAMUS EXC CONNECTIONS:', len(nest.GetConnections(thalamus, exc_neurons)))
-        #print('THALAMUS PV CONNECTIONS:', len(nest.GetConnections(thalamus, pv_neurons)))
+        x, y = nest.GetPosition(thalamus[ni])
+        rate_times = []
+        rate_values = []
+        ix, iy = int(x * img_array.shape[1]), int(y * img_array.shape[0])
+        pixel_value = img_array[iy, ix]
+        sampled_img.append(pixel_value / 5)
+
+        # for repeat in range(nb_repeats):
+            #padding = repeat * (simtime + time_spacing)
+            # time = int(time)
+
+            #padding = repeat * (simtime+time_spacing)
+        rates = [pixel_value / 5] * len(times)
+        rate_times += list(times)
+        rate_values += list(rates)
+        """
+        for repeat in range(nb_repeats):
+            #padding = repeat * (simtime+time_spacing)
+            padding = repeat * (simtime+time_spacing) + sim_delay
+            rates = gext_rate * np.exp(-((times-m_time)**2/(2*s_time**2)+(x-m_xy[0])**2/(2*s_xy[0]**2)+(y-m_xy[1])**2/(2*s_xy[1]**2)))
+
+            rate_times += list(times+ padding)
+            rate_values += list(rates)
+        """
+
+        nest.SetStatus(thalamus[ni], {'rate_times':rate_times, 'rate_values':rate_values})
     
-        source_chr2 = nest.Create('inhomogeneous_poisson_generator', 1)
-        chr2_rates = []
-        chr2_switch_times = []
-        chr2_rate = 1000.
-        for stime in Chr2_times:
+    t2e_conn = {'rule': 'fixed_indegree', 'indegree': Nth, 'mask': {'circular': {'radius': st_lat}}}
+    t2e_syn = {'synapse_model':'static_synapse','receptor_type': 1, 'weight': g_tha_e, 'delay': 0.1}
+    nest.Connect(thalamus, exc_neurons,t2e_conn, syn_spec=t2e_syn)
 
-            for ti in range(int(chr2_rampt)):
-                chr2_switch_times.append(stime-chr2_rampt+ti)
-                chr2_rates.append( chr2_rate * ti / chr2_rampt)
+    t2p_conn = {'rule': 'fixed_indegree', 'indegree': Nth, 'mask': {'circular': {'radius': st_lat}}}
+    t2p_syn = {'synapse_model':'static_synapse', 'weight': g_tha_p, 'delay': 0.1}
+    nest.Connect(thalamus, pv_neurons,t2p_conn, syn_spec=t2p_syn)
 
-            chr2_rates.append(chr2_rate)
-            chr2_switch_times.append(stime)
-
-            chr2_rates.append(0)
-            chr2_switch_times.append(stime+chr2_duration)
-
-        nest.SetStatus(source_chr2, {'rate_times':chr2_switch_times, 'rate_values':chr2_rates})
-
-        if stim_type == 'PV':
-            targets = pv_neurons
-            chr2_str = chr2_str_pv
-        elif stim_type == 'SST':
-            targets = sst_neurons
-            chr2_str = chr2_str_sst
-        else:
-            raise Exception()
-    
-        chr_syn = {'synapse_model':'static_synapse', 'weight': chr2_str}
-        for ni in range(n_pv):
-            dist = nest.Distance(np.array([0.,0.]), targets[ni])
-            if dist[0] < stim_range:
-                #print(dist[0], 'CONNECT!', nest.GetPosition(targets[ni]))
-                nest.Connect(source_chr2, targets[ni], syn_spec = chr_syn)
-            elif stim_type == 'SST':
-                roll = rng.random()
-                if p_chr2_random > roll:
-                    nest.Connect(source_chr2, targets[ni], syn_spec = chr_syn)
-                    #print('random chr2 connect!')
-    
-        #print('STIM CONNECTIONS:', len(nest.GetConnections(source_chr2, targets)))
-        #print(nest.GetStatus(source_chr2, 'spike_times'))
+    #print('THALAMUS EXC CONNECTIONS:', len(nest.GetConnections(thalamus, exc_neurons)))
+    #print('THALAMUS PV CONNECTIONS:', len(nest.GetConnections(thalamus, pv_neurons)))
     
     ### Recording
     exc_sr = nest.Create('spike_recorder',)
@@ -379,7 +338,6 @@ def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
         print('s2e:',len(nest.GetConnections(sst_neurons, exc_neurons)))
         print('s2p:',len(nest.GetConnections(sst_neurons, pv_neurons)))
     
-    simtime = nb_repeats * simtime + (nb_repeats - 1) * time_spacing + sim_delay
     nest.Simulate(simtime)
     
     ### Median FR ###
@@ -422,6 +380,10 @@ def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
     all_positions = np.concatenate([np.array(nest.GetPosition(exc_neurons)), np.array(nest.GetPosition(pv_neurons)), np.array(nest.GetPosition(sst_neurons))])
     with open('%s/%s_positions.pickle'%(result_dir,sim_name), 'wb') as f:
         pickle.dump(all_positions, f)
+        
+    all_rates = exc_rates + pv_rates + sst_rates
+    with open('%s/%s_rates.pickle'%(result_dir,sim_name),'wb') as f:
+        pickle.dump(all_rates,f)
     
     if verbose:
         print("EXC median and mean:", np.median(exc_rates), np.mean(exc_rates))
@@ -431,19 +393,15 @@ def run_simulation(sim_parameters, condition, rngseed = '', verbose=False):
 if __name__=="__main__":
 
     try:
-        sim_parameters = read_sim_params('parameter_sets/base.txt')
+        sim_parameters = read_sim_params('sim_parameters.txt')
     except FileNotFoundError:
         print('Provide sim_parameters.txt')
         sys.exit()
-    
-    contrast_values = [0.02, 0.05,0.1,0.18, 0.33]
-    
-    conditions =  [['Spont',0]] +[  ['PV', c] for c in contrast_values] + [ ['SST', c] for c in contrast_values] 
     #condition = conditions[cond_i]
     
     try:
         rngseed = int(sys.argv[1])
-        cond_i = int(sys.argv[2])
+        img_num = int(sys.argv[2])
     except IndexError:
         print("Provide two arguments: RNG seed and id for simulation conditions.")
         print("Second argument should be 0 for spontaneous conditions, 1-5 for PV stim, 6-10 for SST stim with contrasts 0.02, 0.05, 0.1, 0.18, and 0.33")
@@ -451,14 +409,24 @@ if __name__=="__main__":
 
     #assert stim_type in ['SST', 'PV', 'Spont']
     #condition = [stim_type, contrast]
-    condition = conditions[cond_i]
     
-    
-    result_dir = 'results_%s'%rngseed
+    result_dir = 'results_%s'%img_num
     if not os.path.exists(result_dir):
         try:
             os.makedirs(result_dir)
         except:
             pass
-    
-    run_simulation(sim_parameters, condition, rngseed = rngseed)
+        
+    def rgb_to_grayscale(row):
+        R = row[:1024].reshape(32, 32)
+        G = row[1024:2048].reshape(32, 32)
+        B = row[2048:].reshape(32, 32)
+        grayscale = 0.299 * R + 0.587 * G + 0.114 * B
+        return grayscale
+   
+    with open('../../cifar-10-batches-py/data_batch_1', 'rb') as f:
+        cifar = pickle.load(f, encoding='bytes') 
+    cifar = np.array([rgb_to_grayscale(row) for row in cifar[b'data']])
+    cifar = cifar.astype(np.uint8)
+    img = cifar[img_num]
+    run_simulation(sim_parameters, img_num, img_array = img, rngseed = rngseed)

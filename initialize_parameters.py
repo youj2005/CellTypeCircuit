@@ -18,7 +18,7 @@ sim_params['p_far_s'] = sst_longrange_value
 
 simdir = f'work_dir/{simname}_a{alpha_value}_pf{sst_longrange_value}'
 try:
-    os.mkdir(simdir)
+    os.makedirs(simdir)
 except FileExistsError:
     print(simdir, 'exists.')
 
