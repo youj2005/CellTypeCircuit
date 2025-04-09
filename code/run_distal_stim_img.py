@@ -98,7 +98,7 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     n_sst         = int(n_inh/2)
     n_pv         = int(n_inh/2)
     size          = float(1.)           # Size of the network
-    simtime       = float(1500)          # ms Simulation time for each trial
+    simtime       = float(500)          # ms Simulation time for each trial
     se_lat        = 0.1                 # Spread of the lateral excitatory connections
     si_lat        = 0.1                 # Spread of the lateral inhibitory connections
     st_lat        = 0.2                 # Spread of the thalamic excitatory connections
@@ -402,6 +402,8 @@ if __name__=="__main__":
     try:
         rngseed = int(sys.argv[1])
         img_num = int(sys.argv[2])
+        results_directory = sys.argv[3]
+        cifar_directory = sys.argv[4]
     except IndexError:
         print("Provide two arguments: RNG seed and id for simulation conditions.")
         print("Second argument should be 0 for spontaneous conditions, 1-5 for PV stim, 6-10 for SST stim with contrasts 0.02, 0.05, 0.1, 0.18, and 0.33")
@@ -410,7 +412,7 @@ if __name__=="__main__":
     #assert stim_type in ['SST', 'PV', 'Spont']
     #condition = [stim_type, contrast]
     
-    result_dir = 'results_%s'%img_num
+    result_dir = '%s/results_%s'%(results_directory, img_num)
     if not os.path.exists(result_dir):
         try:
             os.makedirs(result_dir)
@@ -424,7 +426,7 @@ if __name__=="__main__":
         grayscale = 0.299 * R + 0.587 * G + 0.114 * B
         return grayscale
    
-    with open('../../cifar-10-batches-py/data_batch_1', 'rb') as f:
+    with open(f'%s/data_batch_1'%(cifar_directory), 'rb') as f:
         cifar = pickle.load(f, encoding='bytes') 
     cifar = np.array([rgb_to_grayscale(row) for row in cifar[b'data']])
     cifar = cifar.astype(np.uint8)
