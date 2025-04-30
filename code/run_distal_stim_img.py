@@ -15,7 +15,7 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     except :
         pass
 
-    nest.SetKernelStatus({'local_num_threads': 4})
+    nest.SetKernelStatus({'local_num_threads': 8})
     if rngseed != '':
         nest.rng_seed = rngseed
         rng = np.random.default_rng(rngseed)
@@ -92,16 +92,16 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     
     ### Network Parameters ###
     n_cells       = 10000               # Total number of cells in the recurrent network
-    n_thalamus    = 1000                # Total number of cells in the input layer
+    n_thalamus    = 3000                # Total number of cells in the input layer
     n_exc         = 8000
     n_inh         = n_cells - n_exc
     n_sst         = int(n_inh/2)
     n_pv         = int(n_inh/2)
     size          = float(1.)           # Size of the network
-    simtime       = float(500)          # ms Simulation time for each trial
+    simtime       = float(1200)          # ms Simulation time for each trial
     se_lat        = 0.1                 # Spread of the lateral excitatory connections
     si_lat        = 0.1                 # Spread of the lateral inhibitory connections
-    st_lat        = 0.2                 # Spread of the thalamic excitatory connections
+    st_lat        = 0.03                 # Spread of the thalamic excitatory connections
     velocity      = 0.05                # mm/ms  velocity
     
     ### External Input Parameters ###
@@ -118,6 +118,7 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     max_distance  = size/np.sqrt(2)      # Since this is a torus
     max_delay     = dt + max_distance/velocity # Needed for the connectors
     min_delay     = 0.1                     # ms
+    border_length = 0.94
     #rngseed       = 92847459                # Random seed
     #parallel_safe = False                   # To have results independant on number of nodes
     #verbose       = True                    # To display the state of the connectors
@@ -272,25 +273,23 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     #times     = np.arange(0, 200, 1.)
     times     = np.arange(0, 400, 1.)
     times [0] = 0.1
+    border = [0.03, 0.97]
     
     sampled_img = []
+    sampled_rates = []
     for ni in range(n_thalamus):
         x, y = nest.GetPosition(thalamus[ni])
         rate_times = []
         rate_values = []
 
-        x, y = nest.GetPosition(thalamus[ni])
-        rate_times = []
-        rate_values = []
-        ix, iy = int(x * img_array.shape[1]), int(y * img_array.shape[0])
+        if x < border[0] or x > border[1] or y < border[0] or y > border[1]:
+            continue
+
+        ix, iy = int((x - 0.03) / 0.94 * img_array.shape[1]), int((y - 0.03) / 0.94 * img_array.shape[0])
         pixel_value = img_array[iy, ix]
-        sampled_img.append(pixel_value / 5)
+        sampled_img.append((x, y))
+        sampled_rates.append(pixel_value / 5)
 
-        # for repeat in range(nb_repeats):
-            #padding = repeat * (simtime + time_spacing)
-            # time = int(time)
-
-            #padding = repeat * (simtime+time_spacing)
         rates = [pixel_value / 5] * len(times)
         rate_times += list(times)
         rate_values += list(rates)
@@ -306,11 +305,11 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
 
         nest.SetStatus(thalamus[ni], {'rate_times':rate_times, 'rate_values':rate_values})
     
-    t2e_conn = {'rule': 'fixed_indegree', 'indegree': Nth, 'mask': {'circular': {'radius': st_lat}}}
+    t2e_conn = {'rule': 'pairwise_bernoulli', 'p': 0.75, 'mask': {'circular': {'radius': st_lat}}}
     t2e_syn = {'synapse_model':'static_synapse','receptor_type': 1, 'weight': g_tha_e, 'delay': 0.1}
     nest.Connect(thalamus, exc_neurons,t2e_conn, syn_spec=t2e_syn)
 
-    t2p_conn = {'rule': 'fixed_indegree', 'indegree': Nth, 'mask': {'circular': {'radius': st_lat}}}
+    t2p_conn = {'rule': 'pairwise_bernoulli', 'p': 0.75, 'mask': {'circular': {'radius': st_lat}}}
     t2p_syn = {'synapse_model':'static_synapse', 'weight': g_tha_p, 'delay': 0.1}
     nest.Connect(thalamus, pv_neurons,t2p_conn, syn_spec=t2p_syn)
 
@@ -345,12 +344,12 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     pv_indices = np.arange(8001,9001)
     sst_indices = np.arange(9001,10001)
     
-    
     exc_spikes = []
     exc_rates = []
     for ni in exc_indices:
         spike_ids = np.where(exc_sr.events['senders'] == ni)[0]
-        spike_times = exc_sr.events['times'][spike_ids]
+        spike_times = np.array(exc_sr.events['times'][spike_ids])
+        spike_times = spike_times[spike_times > 200]
         exc_spikes.append(spike_times)
         nspikes = len(spike_times)
         exc_rates.append(nspikes / simtime * 1000.0)
@@ -359,16 +358,18 @@ def run_simulation(sim_parameters, img_num, img_array, rngseed = '', verbose=Fal
     pv_rates = []
     for ni in pv_indices:
         spike_ids = np.where(pv_sr.events['senders'] == ni)[0]
-        spike_times = pv_sr.events['times'][spike_ids]
+        spike_times = np.array(pv_sr.events['times'][spike_ids])
+        spike_times = spike_times[spike_times > 200]
         pv_spikes.append(spike_times)
         nspikes = len(spike_times)
-        pv_rates.append(nspikes / simtime * 1000.0)
+        pv_rates.append(nspikes / (simtime - 200) * 1000.0)
     
     sst_spikes = []
     sst_rates = []
     for ni in sst_indices:
         spike_ids = np.where(sst_sr.events['senders'] == ni)[0]
-        spike_times = sst_sr.events['times'][spike_ids]
+        spike_times = np.array(sst_sr.events['times'][spike_ids])
+        spike_times = spike_times[spike_times > 200]
         sst_spikes.append(spike_times)
         nspikes = len(spike_times)
         sst_rates.append(nspikes / simtime * 1000.0)
@@ -418,17 +419,8 @@ if __name__=="__main__":
             os.makedirs(result_dir)
         except:
             pass
-        
-    def rgb_to_grayscale(row):
-        R = row[:1024].reshape(32, 32)
-        G = row[1024:2048].reshape(32, 32)
-        B = row[2048:].reshape(32, 32)
-        grayscale = 0.299 * R + 0.587 * G + 0.114 * B
-        return grayscale
    
     with open(f'%s/data_batch_1'%(cifar_directory), 'rb') as f:
-        cifar = pickle.load(f, encoding='bytes') 
-    cifar = np.array([rgb_to_grayscale(row) for row in cifar[b'data']])
-    cifar = cifar.astype(np.uint8)
+        cifar = pickle.load(f, encoding='bytes')
     img = cifar[img_num]
     run_simulation(sim_parameters, img_num, img_array = img, rngseed = rngseed)
